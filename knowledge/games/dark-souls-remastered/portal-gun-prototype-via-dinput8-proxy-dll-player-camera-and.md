@@ -19,7 +19,7 @@ status: in-progress
 agents:
 - Claude Code (Sonnet 5.5)
 humans: []
-date: '2026-10-08'
+date: '2026-10-12'
 links:
 - https://github.com/JKAnderson/DSR-Gadget
 - https://soulsmodding.com/
@@ -47,7 +47,8 @@ spawn a real Prism Stone projectile, and a fast ownerless projectile fired along
 point places an upright portal flat on a wall. This note is mostly a verified memory map for this build plus the traps we hit.
 
 ## Setup
-- Game: Steam app 570940, App ver 1.03.1 (shown on the title screen), build id 10943698, `DarkSoulsRemastered.exe` 50,286,344 bytes (SHA-256
+- Game: Steam app 570940, App ver 1.03.1 (shown on the title screen), build id 10943698,
+  `DarkSoulsRemastered.exe` 50,286,344 bytes (SHA-256
   `a45aaa36dd2f6cc151670a639ea5547043cf38ea79ff4178b963c6ed71f98d7b`), PE `SizeOfImage` 0x319B000. This size is
   not in DSR-Gadget's version table; DSR-Gadget treats unknown sizes as newer than 1.03 and applies all its boosts.
 - Windows 10, no MSVC. Built with portable Zig: `zig cc -target x86_64-windows-gnu -shared -O2 -o dinput8.dll
@@ -130,8 +131,8 @@ Found by RTTI plus Ghidra headless on the runtime dump. All addresses are relati
     and state are valid only on these. The working code (aimed shot, collision probe) polls this list.
   - **Launchers (0x320 bytes):** free list `[BulletMan + 0x30]`; in-use list head `[BulletMan + 0x28]`, next
     `[obj + 0x308]`; `obj + 0` is the handle that `Spawn` returns (handles look like 0xff02ff00). A launcher carries the
-    shot count and interval, holds state -1 and NaN position, and lives about as long as the shot. Its update
-    (0x140421210) takes a real `BulletIns` from the free list (0x140429ea0 -> 0x14042a880) and positions it (0x1404241d0).
+    shot count and interval, holds state -1 and NaN position, and lives about as long as the shot, while the real
+    bullet it fired flies on the other list.
   Earlier versions of this note called the 0x320-byte objects `BulletIns` and the 0x360-byte pool "emitter-like". That was
   backwards: a per-poll log of both lists during the same throws (state -1 and NaN on the 0x320 list, a live flight and
   impact on the 0x360 list) settled it.
@@ -142,10 +143,12 @@ Found by RTTI plus Ghidra headless on the runtime dump. All addresses are relati
   manager (global exe+0x1c7a050, a pool of 0x80 entries of 0x230 bytes keyed by the handle at BulletIns+0x54). Those
   hit volumes are capsules between two points, mostly bone-attached to an owning character; a bullet with
   `atkId_Bullet = 0` (all three Prism Stone rows) does no hit test at all.
-- **Spawn API:** `exe+0x429ba0 = BulletMan::Spawn(BulletMan*, BulletCreateInfo*)` returns the bullet handle or -1. It
-  builds a 328-byte spawn info (0x14042a1c0), takes a BulletIns from the free list (0x14042a920), initialises it
-  (0x140420ef0) and positions it (0x1404241d0). The game calls it from a bullet emitter (0x14031d380) and for child
-  bullets on explosion (0x140427380), which passes owner = -1, so ownerless bullets are a normal case.
+- **Spawn API:** `exe+0x429ba0 = BulletMan::Spawn(BulletMan*, BulletCreateInfo*)` returns a handle or -1; the handle is
+  the launcher's (see above), not the real bullet's. It builds a 328-byte spawn info (0x14042a1c0), takes an object from
+  a free list (0x14042a920), initialises it (0x140420ef0) and positions it (0x1404241d0). This description predates the
+  launcher finding, so which of the two free lists 0x14042a920 pops has not been re-checked. The game calls Spawn from a
+  bullet emitter (0x14031d380) and for child bullets on explosion (0x140427380), which passes owner = -1, so ownerless
+  bullets are a normal case.
 - **BulletCreateInfo** (recorded from a real Prism Stone throw by hooking Spawn; byte offsets): +0x00 owner ChrIns
   handle (the player was 0x10044000 in every capture; 0xffffffff = none), +0x0c BulletParam id (direct), +0x10 goods id
   (370 for the Prism Stone), +0x1c dummy-poly/placement id (-1 = owner default), +0x30 byte flag 1, +0x40..+0x6f spawn
@@ -164,9 +167,9 @@ Found by RTTI plus Ghidra headless on the runtime dump. All addresses are relati
   gives a world position (used by the aimed shot below), and a bullet that carries an attack param with a marker SpEffect
   could act as a collision trigger. The trigger is not done yet. The impact is the position when the state turns 4:
   for the Prism Stone rows (no explosion) the bullet goes from 2 straight to 4 on a world hit, which was seen in every logged
-  throw and shot. The hit manager's callback sets bit 4 at `BulletIns + 0x2d0` and the update (0x1404246a0) then moves to
-  state 4. State 3 (BulletExplosionState) was never observed with these rows; the probe code treats 3 or 4 as finished,
-  in case exploding bullets pass through 3.
+  throw and shot. State 3 (BulletExplosionState) was never observed with these rows; the probe code treats 3 or 4 as
+  finished, in case exploding bullets pass through 3. Which flag the hit sets is open: the zero-speed probes below kept
+  `BulletIns + 0x2d0` at 0x1d and stayed in state 2 (see Open questions).
 
 ## Param access at runtime and the Prism Stone rows
 - Param manager global at exe+0x1c7e000: `file(type) = [man + 0x18 + (type * 9) * 8]`, row table `t = [file + 0x38]`, id
@@ -353,6 +356,8 @@ One long session (about a day of wall-clock with many launch cycles, each needin
   Worth checking first: DSR-Gadget's warp fields with ChrMapData at `[PlayerIns + 0x68]` (the crashing test used
   `[PlayerIns + 0x18]`; see Gotcha 3).
 - Whether exploding bullets pass through state 3 before 4 (only non-exploding Prism Stone rows were observed).
+- Which flag at `BulletIns + 0x2d0` marks a world hit (read it before and after a logged impact; the non-hitting probes held
+  0x1d), and which free list `Spawn` pops now that its handle is known to be the launcher's.
 - Why a fly-state, zero-speed, zero-damage bullet never hits the player (tested: it does not, see the collision-probe section).
   The hit manager's overlap and team test (exe+0x1c7a050, candidates 0x1403b8400, 0x1403b7290, 0x1403e6450) has to be read or
   hooked, or a Havok phantom with a contact listener used instead.
