@@ -218,7 +218,13 @@ Instead of writing a collision query, fire a bullet along the camera ray and rea
 A portal drawn on a wall cannot be entered by the plane-crossing test, because the wall stops the player before the plane is
 crossed (the log simply had no "crossed" lines). The trigger for wall portals is: body point within 0.6 m in front of the plane,
 inside the ring ellipse, and moving toward the wall; reappear 0.9 m in front of a wall destination (must exceed the trigger
-distance, or you bounce straight back). This trigger is built but was not yet confirmed in the game at the time of writing.
+distance, or you bounce straight back). Confirmed in the game: walking into a shot-placed wall portal fired the trigger every time.
+
+The destination must be checked too. In one test the other portal was a blind "5 m ahead" one that had landed about 1.5 m behind
+a wall. The game refused the first two teleports there (the player stayed at the source portal during the whole hold). It
+accepted the third almost at once (about 60 ms), and the player then fell from y 195.7 to 170 in under a second and died in the
+void: there is no floor behind level walls. A destination needs a floor check (for example a downward projectile) before the
+write, and a fall during the hold should send the player back.
 
 ## Live param tables (this build)
 Table index (the `type` in the param-manager lookup) with row counts read from the running game; the type-name string is at
@@ -241,7 +247,15 @@ coordinates. Results so far, from logs:
   with a PC-table attack (222) it stayed alive (at the origin). Which AtkParam table an ownerless bullet reads is still open.
 - Ownerless bullets are simulated and collide with the world exactly like owned ones, but show no visual effect (the owned stone
   shows its effect). An overlay marker is a workable stand-in for testing.
-- Untested at the time of writing: the fly-state zero-speed probe walking into the player.
+- Fly state (FollowType 0) with zero velocity gives a bullet that stays exactly where it was spawned for its whole life (20 s).
+- **It never hits the player.** Three variants, each a Prism Stone row edited to hit radius 1.0, isHitBothTeam on, isPenetrate off:
+  ownerless with NPC-table attack 3146, ownerless with PC-table attack 222, and player-owned with 3146. The player stood inside
+  each one (closest 0.03 m, 0.08 m and 0.35 m, for seconds at a time). The state stayed 2, the flags at +0x2d0 stayed 0x1d,
+  and each bullet expired normally at the end of its life. So a zero-damage bullet hit volume is not a collision trigger
+  for the player, at least without changes the hit manager needs and we have not found.
+- In that run the player-owned probe started next to the player (at the hand, it seems) instead of at the requested
+  transform, then stayed fixed. Earlier owned replays started at the requested spot. The difference is not known (the
+  replayed create-info had just been re-captured from a spell cast).
 
 
 ## Build steps
@@ -323,6 +337,10 @@ coordinates. Results so far, from logs:
     owner's dummy-poly transform. **Fix:** use FollowType 0 with zero velocity for a fixed volume.
 14. **Symptom.** The impact reading is 0.6 m inside the wall. **Cause:** a 40 m/s bullet moves 0.67 m per frame and state 4 is
     seen after the step. **Fix:** refine with a slow shot (6 m/s) fired from just before the first impact.
+15. **Symptom.** Walking into a portal kills the player by a fall into the void. **Cause:** the destination portal was placed
+    blindly behind a wall; the game rejects such a position at first but can accept it on a retry, and there is no floor
+    there. **Fix:** place portals only with the aimed shot, check the destination for a floor before teleporting, and send
+    the player back if they fall during the hold.
 
 ## Assets
 None generated. The portals are GDI-drawn rings.
@@ -335,9 +353,9 @@ One long session (about a day of wall-clock with many launch cycles, each needin
   Worth checking first: DSR-Gadget's warp fields with ChrMapData at `[PlayerIns + 0x68]` (the crashing test used
   `[PlayerIns + 0x18]`; see Gotcha 3).
 - Whether exploding bullets pass through state 3 before 4 (only non-exploding Prism Stone rows were observed).
-- Does a fly-state, zero-speed, zero-damage bullet with an attack param react to the player (state 3 or 4 near the player)? If yes it
-  is a true collision trigger; if not, the hit manager's overlap and team test (exe+0x1c7a050, candidates 0x1403b8400, 0x1403b7290,
-  0x1403e6450) has to be read or hooked, or a Havok phantom with a contact listener used instead.
+- Why a fly-state, zero-speed, zero-damage bullet never hits the player (tested: it does not, see the collision-probe section).
+  The hit manager's overlap and team test (exe+0x1c7a050, candidates 0x1403b8400, 0x1403b7290, 0x1403e6450) has to be read or
+  hooked, or a Havok phantom with a contact listener used instead.
 - Which AtkParam table (NPC or PC) an ownerless bullet reads, and how to give an ownerless bullet a visible effect (or whether a
   non-player owner such as a nearby NPC is the answer).
 - The bullet impact surface normal (only the position is directly readable from BulletIns).
